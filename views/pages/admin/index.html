@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin</title>
+    <style>body{font-family:system-ui,Arial;max-width:900px;margin:20px}</style>
+  </head>
+  <body>
+    <h1>Admin Dashboard</h1>
+    <section>
+      <h2>Users</h2>
+      <table border="1" cellpadding="6" id="usersTable">
+        <thead><tr><th>Username</th><th>Display</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Keys</h2>
+      <form id="genKey">
+        <label>Name <input name="name"/></label>
+        <label>Expires (ms since epoch) <input name="expires"/></label>
+        <button>Generate</button>
+      </form>
+      <div id="keys">Loading…</div>
+    </section>
+    <section>
+      <h2>Logs</h2>
+      <pre id="logs">Loading…</pre>
+    </section>
+
+    <script>
+      function cookieValue(name) {
+        return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith(name+'='))?.split('=')[1];
+      }
+      async function fetchJSON(path, opts={}) {
+        if (!opts.headers) opts.headers = {};
+        const csrf = cookieValue('csrf-token');
+        if (csrf) opts.headers['X-CSRF-Token'] = decodeURIComponent(csrf);
+        const res = await fetch(path, opts);
+        if (!res.ok) throw new Error('Fetch error ' + res.status);
+        return res.json();
+      }
+      function renderUsers(users) {
+        const tbody = document.querySelector('#usersTable tbody');
+        tbody.innerHTML = '';
+        users.forEach(u => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${u.username}</td>
+            <td>${u.displayName || ''}</td>
+            <td>
+              <form data-user="${u.username}" class="roleForm">
+                <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
+                <button>Save</button>
+              </form>
+            </td>
+            <td>${new Date(u.createdAt).toLocaleString()}</td>
+            <td>
+              <button data-user="${u.username}" class="deleteBtn">Delete</button>
+            </td>
+          `;
+          tr.querySelector('select').value = u.role;
+          tbody.appendChild(tr);
+        });
+        // Wire up forms
+        document.querySelectorAll('.roleForm').forEach(f => f.addEventListener('submit', async (e)=>{
+          e.preventDefault();
+          const username = e.currentTarget.dataset.user;
+          const data = new FormData(e.currentTarget);
+          const body = new URLSearchParams([...data.entries()]);
+          await fetchJSON(`/admin/users/${encodeURIComponent(username)}/role`, { method: 'POST', body });
+          load();
+        }));
+        document.querySelectorAll('.deleteBtn').forEach(b => b.addEventListener('click', async (e)=>{
+          if (!confirm('Delete user ' + e.currentTarget.dataset.user + '?')) return;
+          await fetchJSON(`/admin/users/${encodeURIComponent(e.currentTarget.dataset.user)}/delete`, { method: 'POST' });
+          load();
+        }));
+      }
+      async function load() {
+        const u = await fetchJSON('/admin/users');
+        renderUsers(u.users);
+        const k = await fetchJSON('/admin/keys');
+        document.getElementById('keys').innerText = JSON.stringify(k.keys, null, 2);
+        const l = await fetchJSON('/admin/logs');
+        document.getElementById('logs').innerText = JSON.stringify(l.logs, null, 2);
+      }
+      document.getElementById('genKey').addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const data = new FormData(e.currentTarget);
+        const body = new URLSearchParams([...data.entries()]);
+        const res = await fetchJSON('/admin/keys/create', { method: 'POST', body });
+        const json = await res;
+        alert('Key: ' + (json.key && json.key.token));
+        load();
+      });
+      load().catch((e)=>{ console.error(e); });
+    </script>
+  </body>
+</html>

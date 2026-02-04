@@ -139,7 +139,7 @@ let altPaths = {
   'tor-project': 'tr',
   'titaniumnetwork-discord': 'social',
   'truffled': 'educational',
-  'thecoder-01_g-page': 'tc01-gp',
+  'thecoder-01_g-page': 'tc01-gpage',
   'rammerhead-discord': 'rdis',
   /* Raw File Names */
   files: {

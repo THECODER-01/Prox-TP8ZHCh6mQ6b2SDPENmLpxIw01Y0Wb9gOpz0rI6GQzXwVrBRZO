@@ -1,5 +1,10 @@
 import Fastify from 'fastify';
 import { createServer } from 'node:http';
+import pwdCfg from './password-config.mjs';
+import authRoutes from './authRoutes.mjs';
+import adminRoutes from './adminRoutes.mjs';
+import notesRoutes from './notesRoutes.mjs';
+import { getSession } from './sessions.mjs';
 import { server as wisp, logging } from "@mercuryworkshop/wisp-js/server";
 import createRammerhead from '../lib/rammerhead/src/server/index.js';
 import fastifyHelmet from '@fastify/helmet';
@@ -182,7 +187,75 @@ const supportedTypes = {
     ico: 'image/vnd.microsoft.icon',
   },
   disguise = 'ico';
+const parseCookies = (req) => {
+  const header = req.headers && (req.headers.cookie || '') || '';
+  return Object.fromEntries(
+    header
+      .split(';')
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .map((kv) => {
+        const idx = kv.indexOf('=');
+        return idx === -1
+          ? [kv, '']
+          : [kv.slice(0, idx), decodeURIComponent(kv.slice(idx + 1))];
+      })
+  );
+};
 
+// Enforce site password using the central password config when enabled.
+app.addHook('preHandler', (req, reply, done) => {
+  if (!pwdCfg.isEnabled()) return done();
+  try {
+    const reqPath = new URL(req.url, serverUrl).pathname.slice(serverUrl.pathname.length);
+    // Exempted paths (assets, service workers, rammerhead scripts) and auth endpoints
+    const protectedRh = ['newsession', 'editsession', 'deletesession'];
+    if (
+      reqPath === 'auth/login' ||
+      reqPath === 'auth/register' ||
+      reqPath === 'favicon.ico' ||
+      reqPath.startsWith('assets/') ||
+      reqPath.startsWith('uv/') ||
+      reqPath.startsWith('scram/') ||
+      reqPath.startsWith('epoxy/') ||
+      reqPath.startsWith('libcurl/') ||
+      reqPath.startsWith('baremux/') ||
+      reqPath.startsWith('chii/') ||
+      (rammerheadSession.test(serverUrl.pathname + reqPath) && !protectedRh.includes(reqPath))
+    )
+      return done();
+
+    const cookies = getSession((parseCookies(req.raw) || {})['site-user']);
+    if (cookies) return done();
+
+    reply.redirect(serverUrl.pathname + 'auth/login');
+    reply.hijack();
+    return done();
+  } catch (e) {
+    return done();
+  }
+});
+
+// CSRF protection: double-submit cookie pattern for POST requests (exempting login/register)
+app.addHook('preHandler', (req, reply, done) => {
+  try {
+    if (req.method !== 'POST') return done();
+    const reqPath = new URL(req.url, serverUrl).pathname.slice(serverUrl.pathname.length);
+    const csrfExempt = ['auth/login', 'auth/register'];
+    if (csrfExempt.includes(reqPath)) return done();
+    const cookies = parseCookies(req.raw);
+    const cookieToken = cookies['csrf-token'];
+    const headerToken = req.headers['x-csrf-token'];
+    if (!cookieToken || !headerToken || decodeURIComponent(cookieToken) !== headerToken) {
+      reply.code(403).type('text/plain').send('CSRF token missing or invalid');
+      reply.hijack();
+      return done();
+    }
+    return done();
+  } catch (e) {
+    return done();
+  }
+});
 if (config.disguiseFiles) {
   const getActualPath = (path) =>
       path.slice(0, path.length - 1 - disguise.length),
@@ -291,6 +364,74 @@ app.get(serverUrl.pathname + ':path', (req, reply) => {
   else reply.type(type);
   reply.send(tryReadFile('../views/dist/' + fileName, import.meta.url));
 });
+
+// Login page — GET serves the form, POST validates credentials and sets a secure cookie.
+app.get(serverUrl.pathname + 'login', (req, reply) => {
+  // Only expose the login page when the site password is enabled. Otherwise redirect to site root.
+  if (!pwdCfg.isEnabled()) return reply.redirect(serverUrl.pathname);
+  reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
+  return reply.type(supportedTypes.default).send(tryReadFile('../views/dist/pages/misc/deobf/anti-exfil.html', import.meta.url));
+});
+
+// Logout and revoke session token (if present)
+app.post(serverUrl.pathname + 'logout', (req, reply) => {
+  if (!pwdCfg.isEnabled()) return reply.redirect(serverUrl.pathname + 'login');
+  const cookies = parseCookies(req.raw);
+  const token = cookies[pwdCfg.cookieName];
+  if (token && pwdCfg.revokeToken) pwdCfg.revokeToken(token);
+  // Clear cookie
+  reply.header('Set-Cookie', `${pwdCfg.cookieName}=; Path=${serverUrl.pathname}; Max-Age=0; HttpOnly; SameSite=Strict`);
+  return reply.redirect(serverUrl.pathname + 'login');
+});
+
+app.post(serverUrl.pathname + 'login', async (req, reply) => {
+  if (!pwdCfg.isEnabled()) return reply.redirect(serverUrl.pathname);
+  // Manual body parsing for application/x-www-form-urlencoded to avoid @fastify/formbody version mismatch
+  const ct = (req.headers['content-type'] || '').toLowerCase();
+  let pwd = '';
+  if (ct.includes('application/x-www-form-urlencoded')) {
+    const raw = await new Promise((resolve, reject) => {
+      let data = '';
+      req.raw.on('data', (chunk) => (data += chunk));
+      req.raw.on('end', () => resolve(data));
+      req.raw.on('error', reject);
+    });
+    pwd = new URLSearchParams(raw).get('pwd') || '';
+  } else {
+    pwd = (req.body && req.body.pwd) || '';
+  }
+
+  if (!pwd) return reply.redirect(serverUrl.pathname + 'login?bad=1');
+  // Create a session token (preferred) or fallback to password compare
+  const token = pwdCfg.createToken(pwd);
+  if (token) {
+    let cookie = `${pwdCfg.cookieName}=${token}; Path=${serverUrl.pathname}; HttpOnly; SameSite=Strict`;
+    if (pwdCfg.cookieOptions && pwdCfg.cookieOptions.maxAge)
+      cookie += `; Max-Age=${pwdCfg.cookieOptions.maxAge}`;
+    if ((req.raw.socket && req.raw.socket.encrypted) || serverUrl.protocol === 'https:') cookie += '; Secure';
+    reply.header('Set-Cookie', cookie);
+    return reply.redirect(serverUrl.pathname);
+  }
+  // fallback: maybe old-style direct password comparison
+  if (pwdCfg.verify(pwd)) {
+    const hash = pwdCfg.hash(pwd);
+    let cookie = `${pwdCfg.cookieName}=${hash}; Path=${serverUrl.pathname}; HttpOnly; SameSite=Strict`;
+    if (pwdCfg.cookieOptions && pwdCfg.cookieOptions.maxAge)
+      cookie += `; Max-Age=${pwdCfg.cookieOptions.maxAge}`;
+    if ((req.raw.socket && req.raw.socket.encrypted) || serverUrl.protocol === 'https:') cookie += '; Secure';
+    reply.header('Set-Cookie', cookie);
+    return reply.redirect(serverUrl.pathname);
+  }
+  return reply.redirect(serverUrl.pathname + 'login?bad=1');
+});
+
+// Register the auth routes (username/password + invite registration)
+authRoutes(app, serverUrl);
+// Register admin routes (admin panel & management)
+adminRoutes(app, serverUrl);
+// Register notes routes (user notes / comments / todos)
+notesRoutes(app, serverUrl);
 
 app.get(serverUrl.pathname + 'github/:redirect', (req, reply) => {
   if (req.params.redirect in externalPages.github)

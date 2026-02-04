@@ -356,7 +356,15 @@ const RammerheadEncode = async (baseUrl) => {
     api = {
       // Make a new Rammerhead session and do something with it.
       newsession(callback) {
-        get('{{route}}{{/newsession}}', callback);
+        // Check whether the Rammerhead backend requires a password first.
+        get('{{route}}{{/needpassword}}', (res) => {
+          if (res === 'true') {
+            // If a password is required, use the site login flow.
+            location.href = '{{route}}{{/login}}';
+          } else {
+            get('{{route}}{{/newsession}}', callback);
+          }
+        }, true);
       },
 
       // Check if a session with the specified ID exists, then do something.
@@ -541,6 +549,8 @@ const preparePage = async () => {
     agar: urlHandler(sjUrl('https://agar.io')),
 
     tru: urlHandler(sjUrl('https://truffled.lol/g')),
+
+    'tc01-gpage': urlHandler(sjUrl('https://thecoder-01.github.io/QwertyHk0cw4AuIObCQs5yoFvF0SO8RihjOwMb1DoaORvHtblLOJBM6W/')),
 
     prison: urlHandler(sjUrl('https://vimlark.itch.io/pick-up-prison')),
 

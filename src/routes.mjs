@@ -103,6 +103,7 @@ let externalPages = {
   'patreon': 'https://www.patreon.com/holyunblockerlts',
   'titaniumnetwork-discord': 'https://discord.gg/CwWpdGkuWY',
   'truffled': 'https://truffled.lol',
+  'thecoder-01_g-page': 'https://thecoder-01.github.io/QwertyHk0cw4AuIObCQs5yoFvF0SO8RihjOwMb1DoaORvHtblLOJBM6W/',
   'rammerhead-discord': 'https://discord.gg/VNT4E7gN5Y',
 };
 
@@ -138,6 +139,7 @@ let altPaths = {
   'tor-project': 'tr',
   'titaniumnetwork-discord': 'social',
   'truffled': 'educational',
+  'thecoder-01_g-page': 'tc01-gp',
   'rammerhead-discord': 'rdis',
   /* Raw File Names */
   files: {

@@ -102,7 +102,7 @@ const app = Fastify({
     ignoreDuplicateSlashes: true,
     ignoreTrailingSlash: true,
   },
-  logger: false,
+  logger: true,
   serverFactory: serverFactory,
 });
 
@@ -190,7 +190,7 @@ if (config.disguiseFiles) {
     loaderFile = tryReadFile(
       '../views/dist/pages/misc/deobf/loader.html',
       import.meta.url,
-      false
+      true
     );
   let exemptDirs = [
       'assets',
